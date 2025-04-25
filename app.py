@@ -1,55 +1,57 @@
-import torch
-from fastapi import FastAPI, Body, HTTPException
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
-import uvicorn
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from vllm import LLM, SamplingParams
+from vllm.lora.request import LoRARequest
+import os
 
-app = FastAPI()
+app = FastAPI(title="Llama LoRA API")
 
-# ====== CONFIG ======
-BASE_MODEL = "meta-llama/Llama-3.1-8B"  # Replace with exact HF ID
-LORA_PATH = "./fine_tuned_llama_lora"
-# ====================
+# Configuration
+BASE_MODEL = "meta-llama/Llama-3-8B-Instruct"
+LORA_REPO = "ProfessionalLime1144/Iman_LoRA"
 
-try:
-  print("🔄 Loading tokenizer...")
-  tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL, use_fast=True)
+# Initialize engine
+engine = LLM(
+  model=BASE_MODEL,
+  enable_lora=True,
+  max_lora_rank=64,
+  tensor_parallel_size=1
+)
 
-  print("📦 Loading base model...")
-  base_model = AutoModelForCausalLM.from_pretrained(
-    BASE_MODEL,
-    torch_dtype=torch.float16,
-    device_map="auto"
-  )
-
-  print("🧩 Applying LoRA adapter...")
-  model = PeftModel.from_pretrained(base_model, LORA_PATH)
-  model.eval()
-except Exception as e:
-  print("🚨 Model loading failed:", e)
-  raise
+class GenerationRequest(BaseModel):
+  prompt: str
+  max_tokens: int = 512
+  temperature: float = 0.7
+  top_p: float = 0.95
 
 @app.post("/generate")
-def generate(prompt: str = Body(...), max_tokens: int = 150):
-  if not prompt or not isinstance(prompt, str):
-    raise HTTPException(status_code=400, detail="Prompt must be a non-empty string.")
-
+async def generate(request: GenerationRequest):
   try:
-    inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-    with torch.no_grad():
-      output = model.generate(
-        **inputs,
-        max_new_tokens=max_tokens,
-        do_sample=True,
-        temperature=0.7,
-        top_p=0.95
-      )
-    response = tokenizer.decode(output[0], skip_special_tokens=True)
-    return {"response": response.strip()}
-  except torch.cuda.OutOfMemoryError:
-    raise HTTPException(status_code=500, detail="CUDA out of memory. Try a shorter prompt or fewer tokens.")
+    # Setup LoRA
+    lora_request = LoRARequest(
+      lora_name="iman_lora",
+      lora_int_id=1,
+      lora_local_path="/lora"  # Mounted volume
+    )
+
+    # Generate response
+    sampling_params = SamplingParams(
+      temperature=request.temperature,
+      top_p=request.top_p,
+      max_tokens=request.max_tokens
+    )
+
+    outputs = engine.generate(
+      request.prompt,
+      sampling_params,
+      lora_request=lora_request
+    )
+
+    return {"response": outputs[0].text}
+
   except Exception as e:
-    raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
+    raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-  uvicorn.run("app:app", host="0.0.0.0", port=8000)
+  import uvicorn
+  uvicorn.run(app, host="0.0.0.0", port=8000)
