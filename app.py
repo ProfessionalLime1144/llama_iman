@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # ===== Configuration =====
 class Config:
   BASE_MODEL = os.getenv("BASE_MODEL", "meta-llama/Llama-3-8B-Instruct")
-  LORA_PATH = "/lora"  # RunPod volume mount path
+  LORA_PATH = "/fine_tuned_llama_lora"  # RunPod volume mount path
   DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
   MAX_TOKENS_LIMIT = 2048
 
