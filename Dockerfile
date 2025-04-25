@@ -7,12 +7,17 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Upgrade pip to avoid issues with older versions
+RUN python3 -m pip install --upgrade pip
+
 # Set working directory
 WORKDIR /app
 
 # Copy Python requirements and install dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt || \
+    (echo "Retrying with specific versions for dependencies..." && \
+     pip install --no-cache-dir torch==2.0.0 vllm==0.0.1 runpod==0.1.2 pydantic==1.10.2)
 
 # Copy application code
 COPY app.py .
