@@ -6,6 +6,12 @@ from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 import torch
 import runpod
+from huggingface_hub import login
+import os
+
+HF_TOKEN = os.getenv("HF_TOKEN")
+if HF_TOKEN:
+    login(token=HF_TOKEN)
 
 # ===== Logging Setup =====
 logging.basicConfig(
