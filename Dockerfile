@@ -4,6 +4,7 @@ FROM nvidia/cuda:12.1.1-base-ubuntu22.04
 RUN apt-get update && apt-get install -y \
     python3-pip \
     git \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Working directory
@@ -19,9 +20,10 @@ COPY app.py .
 # Create LoRA directory
 RUN mkdir -p /lora
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Optional: Remove or customize the health check depending on RunPod setup
+# HEALTHCHECK not strictly necessary for serverless RunPod
+# HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+#     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the app
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run with Python since runpod handles the serverless wrapping
+CMD ["python3", "app.py"]
