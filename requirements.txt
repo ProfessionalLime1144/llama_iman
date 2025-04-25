@@ -1,4 +1,4 @@
-torch==2.7.0
-vllm==0.8.4
-runpod==1.7.9
-pydantic==2.11.3
+torch
+vllm
+runpod
+pydantic
