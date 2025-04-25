@@ -1,4 +1,5 @@
-torch
 vllm
+torch
 runpod
 pydantic
+huggingface_hub
