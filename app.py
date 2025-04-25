@@ -1,12 +1,11 @@
 import logging
 import os
 import time
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 import torch
+import runpod
 
 # ===== Logging Setup =====
 logging.basicConfig(
@@ -23,14 +22,11 @@ class Config:
   DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
   MAX_TOKENS_LIMIT = 2048
 
-# ===== API Setup =====
-app = FastAPI(title="Llama LoRA API")
-
 # ===== Model Initialization =====
 try:
   logger.info(f"🔥 Initializing vLLM engine on {Config.DEVICE}")
   start_time = time.time()
-  
+
   engine = LLM(
     model=Config.BASE_MODEL,
     enable_lora=True,
@@ -39,14 +35,13 @@ try:
     gpu_memory_utilization=0.9,
     max_model_len=Config.MAX_TOKENS_LIMIT
   )
-  
-  logger.info(f"✅ Engine loaded in {time.time() - start_time:.2f}s")
 
+  logger.info(f"✅ Engine loaded in {time.time() - start_time:.2f}s")
 except Exception as e:
   logger.critical(f"❌ Engine initialization failed: {str(e)}")
   raise RuntimeError("Model loading failed")
 
-# ===== Request Models =====
+# ===== Input Validation Schema =====
 class GenerationRequest(BaseModel):
   prompt: str
   max_tokens: int = 512
@@ -54,58 +49,29 @@ class GenerationRequest(BaseModel):
   top_p: float = 0.95
   stop: list[str] = ["\n", "###"]
 
-# ===== API Endpoints =====
-@app.post("/generate")
-async def generate_direct(request: GenerationRequest):
-  """Direct endpoint for testing"""
-  return await handle_generation(request)
-
-@app.post("/")
-async def runpod_handler(raw_request: Request):
-  """RunPod Worker API endpoint"""
+# ===== Generation Handler =====
+def handler(event):
   try:
-    # Parse RunPod's wrapped request
-    data = await raw_request.json()
-    logger.info(f"📥 Received request: {data}")
+    logger.info(f"📥 Received request: {event}")
     
-    # Validate input format
-    if "input" not in data:
-      raise HTTPException(status_code=400, detail="Missing 'input' field")
-    
-    # Convert to GenerationRequest
-    gen_request = GenerationRequest(
-      prompt=data["input"]["prompt"],
-      max_tokens=data["input"].get("max_tokens", 512),
-      temperature=data["input"].get("temperature", 0.7)
-    )
-    
-    # Process generation
-    result = await handle_generation(gen_request)
-    
-    return JSONResponse({
-      "status": "COMPLETED",
-      "output": result
-    })
-    
-  except HTTPException as he:
-    logger.error(f"🚨 HTTP Error: {he.detail}")
-    return JSONResponse(
-      {"status": "FAILED", "error": he.detail},
-      status_code=he.status_code
-    )
-  except Exception as e:
-    logger.critical(f"💥 Critical error: {str(e)}")
-    return JSONResponse(
-      {"status": "FAILED", "error": "Internal server error"},
-      status_code=500
+    # Parse and validate request
+    input_data = event.get("input")
+    if input_data is None or "prompt" not in input_data:
+      return {
+        "status": "FAILED",
+        "error": "Missing 'input' field with required 'prompt'"
+      }
+
+    # Convert input to request object
+    request = GenerationRequest(
+      prompt=input_data["prompt"],
+      max_tokens=input_data.get("max_tokens", 512),
+      temperature=input_data.get("temperature", 0.7),
+      top_p=input_data.get("top_p", 0.95),
+      stop=input_data.get("stop", ["\n", "###"])
     )
 
-async def handle_generation(request: GenerationRequest):
-  """Shared generation logic"""
-  try:
-    logger.info(f"⚡ Processing request: {request}")
-    
-    # Verify LoRA files exist
+    # Verify LoRA files
     required_files = ["adapter_config.json", "adapter_model.safetensors"]
     missing_files = [
       f for f in required_files 
@@ -114,7 +80,10 @@ async def handle_generation(request: GenerationRequest):
     if missing_files:
       error_msg = f"Missing LoRA files: {missing_files}"
       logger.error(error_msg)
-      raise HTTPException(status_code=400, detail=error_msg)
+      return {
+        "status": "FAILED",
+        "error": error_msg
+      }
 
     # Configure LoRA
     lora_request = LoRARequest(
@@ -123,7 +92,7 @@ async def handle_generation(request: GenerationRequest):
       lora_local_path=Config.LORA_PATH
     )
 
-    # Set generation parameters
+    # Set sampling parameters
     sampling_params = SamplingParams(
       temperature=request.temperature,
       top_p=request.top_p,
@@ -131,49 +100,37 @@ async def handle_generation(request: GenerationRequest):
       stop=request.stop
     )
 
-    # Execute generation
+    # Generate output
     start_time = time.time()
     outputs = engine.generate(
       request.prompt,
       sampling_params,
       lora_request=lora_request
     )
-    
     logger.info(f"⏱️ Generation took {time.time() - start_time:.2f}s")
-    
+
     return {
-      "response": outputs[0].text,
-      "tokens_used": len(outputs[0].token_ids)
+      "status": "COMPLETED",
+      "output": {
+        "response": outputs[0].text,
+        "tokens_used": len(outputs[0].token_ids)
+      }
     }
 
   except torch.cuda.OutOfMemoryError:
     error_msg = "CUDA OOM - Reduce max_tokens"
     logger.error(error_msg)
-    raise HTTPException(status_code=400, detail=error_msg)
+    return {
+      "status": "FAILED",
+      "error": error_msg
+    }
+
   except Exception as e:
-    logger.error(f"Generation error: {str(e)}")
-    raise HTTPException(status_code=500, detail=str(e))
+    logger.critical(f"💥 Unexpected error: {str(e)}")
+    return {
+      "status": "FAILED",
+      "error": "Internal server error"
+    }
 
-# ===== Health Check =====
-@app.get("/health")
-def health_check():
-  return {"status": "healthy"}
-
-# ===== Startup Event =====
-@app.on_event("startup")
-async def startup_event():
-  logger.info("🚀 Starting API Server")
-  logger.info(f"🔧 Base Model: {Config.BASE_MODEL}")
-  logger.info(f"🔧 LoRA Path: {Config.LORA_PATH}")
-  logger.info(f"🔧 Device: {Config.DEVICE}")
-  logger.info(f"📂 Volume Contents: {os.listdir(Config.LORA_PATH)}")
-
-if __name__ == "__main__":
-  import uvicorn
-  uvicorn.run(
-    app,
-    host="0.0.0.0",
-    port=8000,
-    log_level="info",
-    access_log=False
-  )
+# ===== Start Serverless Handler =====
+runpod.serverless.start({"handler": handler})
