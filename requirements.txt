@@ -1,7 +1,4 @@
-vllm
-fastapi
-uvicorn
-pydantic
 torch
-huggingface-hub
-python-dotenv
+vllm
+runpod
+pydantic
