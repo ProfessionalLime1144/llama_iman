@@ -20,10 +20,5 @@ COPY app.py .
 # Create LoRA directory
 RUN mkdir -p /lora
 
-# Optional: Remove or customize the health check depending on RunPod setup
-# HEALTHCHECK not strictly necessary for serverless RunPod
-# HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-#     CMD curl -f http://localhost:8000/health || exit 1
-
-# Run with Python since runpod handles the serverless wrapping
+# Run the app
 CMD ["python3", "app.py"]
